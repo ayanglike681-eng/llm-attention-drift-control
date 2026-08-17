@@ -1,0 +1,412 @@
+# Dify Chatflow — Attention Drift Control Workflow
+# 将此文件导入 Dify 平台（工作室 → 导入）
+# Dify 版本要求：>= 0.6.0
+
+app:
+  name: "Attention Drift Control Chatflow"
+  description: "带注意力漂移控制的长对话工作流"
+  mode: "advanced-chat"
+  icon: "🧭"
+
+# ============================================================
+# 会话变量（在对话生命周期中持久化）
+# ============================================================
+conversation_variables:
+  - name: conversation_state
+    type: string
+    default: "init"
+    description: "当前状态机状态"
+
+  - name: core_task
+    type: string
+    default: ""
+    description: "核心任务描述"
+
+  - name: constraints
+    type: array[string]
+    default: []
+    description: "活跃约束列表"
+
+  - name: key_facts
+    type: array[string]
+    default: []
+    description: "已确立的关键事实"
+
+  - name: pending_tasks
+    type: array[string]
+    default: []
+    description: "待处理任务"
+
+  - name: completed_tasks
+    type: array[string]
+    default: []
+    description: "已完成任务"
+
+  - name: drift_score
+    type: number
+    default: 0.0
+    description: "当前漂移评分"
+
+  - name: consecutive_drift_turns
+    type: number
+    default: 0
+    description: "连续漂移轮次"
+
+  - name: turn_count
+    type: number
+    default: 0
+    description: "当前对话轮次"
+
+  - name: last_stable_checkpoint
+    type: string
+    default: ""
+    description: "上一个稳定检查点标识"
+
+  - name: drift_recovery_active
+    type: boolean
+    default: false
+    description: "是否正在执行漂移恢复"
+
+# ============================================================
+# 工作流图
+# ============================================================
+graph:
+  nodes:
+    # --- 入口节点 ---
+    - id: start
+      type: start
+      title: "对话开始"
+      outputs:
+        - name: user_query
+          type: string
+
+    # --- 系统提示词加载 ---
+    - id: load_context
+      type: variable-aggregator
+      title: "加载上下文"
+      inputs:
+        - conversation_state
+        - core_task
+        - constraints
+        - key_facts
+        - pending_tasks
+      outputs:
+        - name: context_block
+          type: string
+
+    # --- 状态路由 ---
+    - id: state_router
+      type: if-else
+      title: "状态路由"
+      inputs:
+        - conversation_state
+      conditions:
+        - condition: "conversation_state == 'init'"
+          target: clarify_node
+        - condition: "conversation_state == 'clarify'"
+          target: clarify_node
+        - condition: "conversation_state == 'tasking'"
+          target: tasking_node
+        - condition: "conversation_state == 'drift'"
+          target: drift_recovery_node
+        - condition: "conversation_state == 'verify'"
+          target: verify_node
+        - condition: "conversation_state == 'completed'"
+          target: complete_node
+
+    # --- 需求澄清 ---
+    - id: clarify_node
+      type: llm
+      title: "需求澄清"
+      model:
+        provider: openai
+        name: gpt-4o
+      prompt_template: |
+        ## 系统角色
+        你是高可靠性AI助手。当前处于需求澄清阶段。
+
+        ## 核心任务（如有）
+        {{core_task}}
+
+        ## 用户消息
+        {{user_query}}
+
+        ## 指令
+        1. 如果核心任务不明确，提出1-2个澄清问题
+        2. 如果核心任务已明确，从用户消息中提取并更新核心任务和约束
+        3. 输出格式：
+        ```json
+        {
+          "core_task_updated": "更新后的核心任务",
+          "constraints_updated": ["约束1", "约束2"],
+          "response": "对用户的回复",
+          "state_next": "clarify" | "tasking"
+        }
+        ```
+      outputs:
+        - name: clarify_output
+          type: string
+
+    # --- 任务执行 ---
+    - id: tasking_node
+      type: llm
+      title: "任务执行"
+      model:
+        provider: openai
+        name: gpt-4o
+      prompt_template: |
+        ## 系统角色
+        你是高可靠性AI助手。
+
+        ## 核心任务（请始终牢记）
+        {{core_task}}
+
+        ## 活跃约束（必须100%遵守）
+        {{constraints}}
+
+        ## 已确立的关键事实
+        {{key_facts}}
+
+        ## 待处理任务
+        {{pending_tasks}}
+
+        ## 当前轮次
+        第 {{turn_count}} 轮
+
+        ## 用户消息
+        {{user_query}}
+
+        ## 回复要求
+        1. 确保回复与核心任务直接相关
+        2. 遵守所有活跃约束
+        3. 如果检测到问题已偏离核心任务，在回复中加入 [DRIFT_CHECK_NEEDED]
+        4. 如果任务有进展，更新相关事实
+      outputs:
+        - name: llm_response
+          type: string
+
+    # --- 漂移检测 ---
+    - id: drift_detector
+      type: llm
+      title: "漂移检测"
+      model:
+        provider: openai
+        name: gpt-4o-mini  # 使用轻量模型降低成本
+      prompt_template: |
+        ## 角色：对话质量评审员
+
+        评审以下 AI 回复是否偏离核心任务。
+
+        ### 核心任务
+        {{core_task}}
+
+        ### 活跃约束
+        {{constraints}}
+
+        ### AI 的最近回复
+        {{llm_response}}
+
+        ### 用户消息
+        {{user_query}}
+
+        ### 评估维度
+        1. 任务相关性 (0-10)：回复与核心任务的相关程度
+        2. 约束遵循度 (0-10)：是否遵守所有活跃约束
+        3. 重复度 (0-10)：是否在重复之前已说过的内容
+        4. 进展度 (0-10)：是否推动了任务进展
+
+        ### 输出格式（严格 JSON）
+        ```json
+        {
+          "task_relevance": 0-10,
+          "constraint_adherence": 0-10,
+          "repetition_score": 0-10,
+          "progress_score": 0-10,
+          "drift_score": 0.0-1.0,
+          "needs_recovery": true/false,
+          "reasons": ["原因1", "原因2"]
+        }
+        ```
+      outputs:
+        - name: drift_check_result
+          type: string
+
+    # --- 漂移处理路由 ---
+    - id: drift_router
+      type: if-else
+      title: "漂移处理路由"
+      inputs:
+        - drift_check_result.needs_recovery
+      conditions:
+        - condition: "needs_recovery == true"
+          target: drift_recovery_node
+        - condition: "needs_recovery == false"
+          target: progress_update
+
+    # --- 漂移恢复 ---
+    - id: drift_recovery_node
+      type: llm
+      title: "漂移恢复"
+      model:
+        provider: openai
+        name: gpt-4o
+      prompt_template: |
+        ⚠️ **注意力漂移恢复模式**
+
+        检测到上一轮回复出现注意力漂移。
+        漂移原因：{{drift_check_result.reasons}}
+        漂移分数：{{drift_check_result.drift_score}}
+
+        ## 核心任务（重新聚焦）
+        {{core_task}}
+
+        ## 活跃约束（重申）
+        {{constraints}}
+
+        ## 用户最后一条消息
+        {{user_query}}
+
+        ## 恢复指令
+        1. **主动声明**：以 "⚠️ 检测到此前回复有所偏离，正在重新聚焦..." 开头
+        2. **重新确认任务**：简要重述核心任务
+        3. **重试回复**：重新生成针对用户最新消息的正确回复
+        4. **保持诚实**：如果之前给出了错误信息，主动纠正
+
+        这是第 {{consecutive_drift_turns}} 次连续漂移。
+        如果超过 2 次，建议主动建议用户缩小范围或重新开始。
+      outputs:
+        - name: recovery_response
+          type: string
+
+    # --- 进度更新 ---
+    - id: progress_update
+      type: code
+      title: "更新进度变量"
+      code: |
+        # 伪代码：更新会话变量
+        turn_count = turn_count + 1
+        if drift_score > 0.5:
+          consecutive_drift_turns = consecutive_drift_turns + 1
+        else:
+          consecutive_drift_turns = 0
+
+        # 每10轮检查是否应进入验证状态
+        if turn_count % 10 == 0 and pending_tasks.length == 0:
+          conversation_state = "verify"
+      outputs:
+        - name: updated_variables
+          type: object
+
+    # --- 任务验证 ---
+    - id: verify_node
+      type: llm
+      title: "任务验证"
+      model:
+        provider: openai
+        name: gpt-4o
+      prompt_template: |
+        ## 任务完成验证
+
+        请全面检查以下内容：
+
+        ### 核心任务
+        {{core_task}}
+
+        ### 活跃约束
+        {{constraints}}
+
+        ### 已完成
+        {{completed_tasks}}
+
+        ### 待处理
+        {{pending_tasks}}
+
+        ### 关键事实
+        {{key_facts}}
+
+        ### 验证问题
+        1. 核心任务是否已完成？
+        2. 所有约束是否得到遵守？
+        3. 是否有遗漏的子任务？
+        4. 是否有前后不一致的信息？
+
+        ### 输出格式
+        ```json
+        {
+          "task_complete": true/false,
+          "constraints_all_met": true/false,
+          "missed_items": ["遗漏项"],
+          "inconsistencies": ["不一致项"],
+          "final_summary": "总结",
+          "next_state": "completed" | "tasking"
+        }
+        ```
+      outputs:
+        - name: verification_result
+          type: string
+
+    # --- 完成节点 ---
+    - id: complete_node
+      type: answer
+      title: "输出结果"
+      answer: |
+        {{verification_result.final_summary}}
+
+        ---
+        📊 **对话统计**
+        - 总轮次：{{turn_count}}
+        - 完成任务：{{completed_tasks.length}}
+        - 漂移恢复次数：{{consecutive_drift_turns}}
+
+  # ============================================================
+  # 边（节点间连接）
+  # ============================================================
+  edges:
+    - source: start
+      target: load_context
+
+    # load_context 之后总是进入 state_router
+    - source: load_context
+      target: state_router
+
+    # 任务执行后始终进行漂移检测
+    - source: tasking_node
+      target: drift_detector
+
+    # 漂移检测后路由
+    - source: drift_detector
+      target: drift_router
+
+    # 漂移恢复后更新状态
+    - source: drift_recovery_node
+      target: progress_update
+
+    # 澄清后更新状态
+    - source: clarify_node
+      target: progress_update
+
+    # 进度更新后回到状态路由（下一轮）
+    - source: progress_update
+      target: state_router
+
+    # 验证节点
+    - source: verify_node
+      target: state_router
+
+# ============================================================
+# 特性开关（Dify 企业版功能）
+# ============================================================
+features:
+  conversation_opener: |
+    你好！我是带有注意力控制能力的 AI 助手。
+    请告诉我你需要什么帮助，我会在整个对话过程中保持聚焦。
+
+  suggested_questions:
+    - "帮我总结一下当前的进度"
+    - "重新确认一下核心任务"
+    - "检查我们是否偏离了主题"
+
+  more:
+    retriever_enabled: false
+    sensitive_word_avoidance: false
+    file_upload_enabled: true

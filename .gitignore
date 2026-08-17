@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# 本地 Claude 配置（含个人权限规则，不入库）
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*.venv/
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/

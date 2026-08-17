@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-drift-control/state-summary.schema.json",
+  "title": "Conversation State Summary",
+  "description": "结构化对话状态摘要，用于上下文压缩时统一数据格式。确保不同压缩周期产出的摘要结构一致。",
+  "type": "object",
+  "required": ["version", "timestamp", "summary", "active_constraints", "key_facts", "pending_items"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "2.5.0",
+      "description": "Schema 版本号"
+    },
+    "compression_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "本次压缩的唯一标识"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "压缩时间戳"
+    },
+    "conversation_context": {
+      "type": "object",
+      "description": "对话的元信息",
+      "properties": {
+        "total_turns_processed": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "已处理的总轮数"
+        },
+        "turn_range": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "type": "integer" },
+          "description": "本轮压缩覆盖的轮次范围 [start, end]"
+        },
+        "original_token_estimate": {
+          "type": "integer",
+          "description": "压缩前的 token 估算数"
+        },
+        "compressed_token_count": {
+          "type": "integer",
+          "description": "压缩后的 token 数"
+        }
+      }
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 1000,
+      "description": "3-5句话的对话状态摘要，概括当前进展和核心议题"
+    },
+    "active_constraints": {
+      "type": "array",
+      "description": "当前仍然有效的约束条件",
+      "items": {
+        "type": "object",
+        "required": ["id", "content", "established_at_turn", "still_valid"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "约束唯一标识"
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "约束内容"
+          },
+          "category": {
+            "type": "string",
+            "enum": ["format", "content", "behavior", "domain", "other"],
+            "description": "约束类别"
+          },
+          "established_at_turn": {
+            "type": "integer",
+            "description": "约束建立的轮次"
+          },
+          "still_valid": {
+            "type": "boolean",
+            "description": "是否仍然有效（可能被后续轮次覆盖）"
+          },
+          "invalidated_at_turn": {
+            "type": "integer",
+            "description": "如果失效，在哪一轮被覆盖"
+          }
+        }
+      }
+    },
+    "key_facts": {
+      "type": "array",
+      "description": "对话中确立的关键事实",
+      "items": {
+        "type": "object",
+        "required": ["id", "content", "source_turns", "confidence"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "source_turns": {
+            "type": "array",
+            "items": { "type": "integer" },
+            "description": "该事实在哪些轮次被提及或确认"
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["confirmed", "tentative", "disputed"],
+            "description": "事实的确信度"
+          }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "description": "对话中做出的决策",
+      "items": {
+        "type": "object",
+        "required": ["id", "content", "decided_at_turn"],
+        "properties": {
+          "id": { "type": "string" },
+          "content": { "type": "string", "maxLength": 500 },
+          "decided_at_turn": { "type": "integer" },
+          "rationale": { "type": "string", "description": "决策理由" }
+        }
+      }
+    },
+    "pending_items": {
+      "type": "array",
+      "description": "待处理的事项",
+      "items": {
+        "type": "object",
+        "required": ["id", "content", "raised_at_turn", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "content": { "type": "string", "maxLength": 500 },
+          "raised_at_turn": { "type": "integer" },
+          "status": {
+            "type": "string",
+            "enum": ["not_started", "in_progress", "blocked"],
+            "description": "处理状态"
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["high", "medium", "low"],
+            "description": "优先级"
+          }
+        }
+      }
+    },
+    "drift_indicators": {
+      "type": "object",
+      "description": "漂移检测指标（可选，供监控使用）",
+      "properties": {
+        "repetition_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "重复度评分"
+        },
+        "constraint_adherence_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "约束遵循度评分"
+        },
+        "topic_coherence_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "主题连贯性评分"
+        }
+      }
+    },
+    "previous_compression_ref": {
+      "type": "string",
+      "description": "引用上一次压缩的 compression_id，用于追溯链"
+    }
+  }
+}

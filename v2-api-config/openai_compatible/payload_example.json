@@ -1,0 +1,99 @@
+{
+  "_overview": "OpenAI 兼容 API 的请求体示例。仅作参考——API 参数是辅助手段，不是独立层。核心漂移控制请用 L1 Prompt / L2 Context / L3 State 三层体系。",
+
+  "model": "gpt-4o",
+  "messages": [
+    {
+      "role": "system",
+      "content": "你是高可靠性助手。核心任务：{TASK_DESCRIPTION}\n\n每次回复前自检：是否记住核心任务？是否遵循输出格式？偏离时先声明 `[DRIFT_DETECTED]` 再纠正。"
+    },
+    {
+      "role": "user",
+      "content": "用户的第一条消息..."
+    }
+  ],
+
+  "temperature": 0.3,
+  "_temperature": {
+    "value": 0.3,
+    "range": "0.0 ~ 2.0",
+    "对症": "🙈 选择性遗忘 + 🎛️ 格式崩坏",
+    "why": "低 temperature 减少随机采样，概率分布更集中 → 更严格遵循指令和格式。",
+    "tuning": "轻微漂移=0.5，中度=0.3，严重=0.1。"
+  },
+
+  "frequency_penalty": 0.3,
+  "_frequency_penalty": {
+    "value": 0.3,
+    "range": "-2.0 ~ 2.0",
+    "对症": "🌀 车轱辘话（反复说同一观点，换不同措辞重复）",
+    "why": "正值惩罚已出现 token 的 logit，模型被迫换词。注意：Anthropic 不支持此参数。",
+    "tuning": "轻微重复=0.1，明显车轱辘话=0.5，严重=0.8+。超过 0.7 输出可能不自然。"
+  },
+
+  "presence_penalty": 0.2,
+  "_presence_penalty": {
+    "value": 0.2,
+    "range": "-2.0 ~ 2.0",
+    "对症": "🔁 主题卡死（困在一个子话题上反复挖掘）",
+    "why": "惩罚已经涉及过的主题概念，推动模型探索新方向。注意：Anthropic 不支持此参数。",
+    "tuning": "与 frequency_penalty 配合：重复内容多→加 frequency，话题单一→加 presence。"
+  },
+
+  "top_p": 0.9,
+  "_top_p": {
+    "value": 0.9,
+    "range": "0.0 ~ 1.0",
+    "对症": "🏃 跑题狂奔（核采样收窄，裁掉长尾低概率 token）",
+    "tuning": "严格遵循=0.8~0.9，需要创意=0.95~1.0。"
+  },
+
+  "stop": [
+    "[DRIFT_DETECTED]",
+    "\n\nHuman:",
+    "\n\nAssistant:",
+    "END_OF_RESPONSE"
+  ],
+  "_stop": {
+    "对症": "🏃 跑题狂奔 + 👻 幻想额外对话",
+    "why_each": {
+      "[DRIFT_DETECTED]": "与 L1 system prompt 联动——模型检测到偏离时主动标记，API 立即截断。",
+      "\"\\n\\nHuman:\"": "GPT 系模型在长对话中有时幻想新的用户消息。此 stop 序列一旦出现立即截断。",
+      "\"\\n\\nAssistant:\"": "同理，防止模型幻想自己的后续回复。",
+      "\"END_OF_RESPONSE\"": "通用紧急刹车。"
+    }
+  },
+
+  "max_tokens": 2048,
+  "_max_tokens": {
+    "对症": "🏃 跑题狂奔（兜底：限制输出长度，控制损害范围）",
+    "why": "不解决漂移，但跑题后至少不会长篇大论污染上下文。"
+  },
+
+  "_参数调优分阶指南": {
+    "轻量控制（<10轮）": {
+      "temperature": 0.5,
+      "frequency_penalty": 0.1,
+      "presence_penalty": 0.0,
+      "top_p": 0.95
+    },
+    "中度控制（10-30轮）": {
+      "temperature": 0.3,
+      "frequency_penalty": 0.3,
+      "presence_penalty": 0.2,
+      "top_p": 0.9
+    },
+    "强力控制（30-50轮，建议搭配 L2 Context）": {
+      "temperature": 0.1,
+      "frequency_penalty": 0.5,
+      "presence_penalty": 0.4,
+      "top_p": 0.85
+    },
+    "极限控制（50+轮，建议升级到 L3 State）": {
+      "temperature": 0.05,
+      "frequency_penalty": 0.7,
+      "presence_penalty": 0.6,
+      "top_p": 0.8
+    }
+  }
+}
