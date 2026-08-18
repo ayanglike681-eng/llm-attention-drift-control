@@ -1,0 +1,1368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>注意力漂移控制 · 一个信息论的同构</title>
+<meta name="description" content="若山照彦的小鼠在第58代撞墙——这是一面镜子。大模型在同一面墙上撞了多久？" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600&family=Noto+Serif+SC:wght@300;400;500;600&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet" />
+<style>
+/* ============================================================
+   设计系统 · Design Tokens
+   ============================================================ */
+:root{
+  --bg:#0a0a0c;
+  --bg-soft:#111114;
+  --bg-card:#0e0e11;
+  --fg:#e8e8ea;
+  --fg-soft:#9a9aa0;
+  --fg-mute:#5a5a60;
+  --fg-faint:#3a3a40;
+  --line:#1c1c20;
+  --line-soft:#141418;
+  --line-strong:#26262c;
+
+  --accent:#ff5a36;
+  --accent-soft:#ff9248;
+  --accent-warm:#ffc857;
+  --accent-cool:#4cc9f0;
+  --signal:#7a8fa6;
+
+  --spectrum:linear-gradient(90deg,#ff5a36 0%,#ff9248 28%,#ffc857 52%,#4cc9f0 76%,#7a8fa6 100%);
+  --spectrum-fade:linear-gradient(90deg,rgba(255,90,54,.9) 0%,rgba(255,146,72,.7) 28%,rgba(255,200,87,.5) 52%,rgba(76,201,240,.35) 76%,rgba(122,143,166,.15) 100%);
+
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --display:'Space Grotesk','Noto Sans SC',sans-serif;
+  --serif:'Noto Serif SC',Georgia,serif;
+  --sans:'Noto Sans SC','Space Grotesk',sans-serif;
+
+  --maxw:1180px;
+  --gutter:clamp(20px,5vw,64px);
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+body{
+  background:var(--bg);
+  color:var(--fg);
+  font-family:var(--sans);
+  font-size:16px;
+  line-height:1.65;
+  overflow-x:hidden;
+  position:relative;
+}
+
+/* 全局噪点纹理 - 实验数据艺术基底 */
+body::before{
+  content:"";
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+  z-index:1;
+  opacity:.35;
+  mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.9 0 0 0 0 0.9 0 0 0 0 0.95 0 0 0 0.15 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+/* 全局网格 - 数据可视化的坐标系感 */
+body::after{
+  content:"";
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+  z-index:0;
+  background-image:
+    linear-gradient(to right,rgba(255,255,255,.018) 1px,transparent 1px),
+    linear-gradient(to bottom,rgba(255,255,255,.018) 1px,transparent 1px);
+  background-size:64px 64px;
+}
+
+main{position:relative;z-index:2}
+
+/* ============================================================
+   顶部进度条 + 元数据带
+   ============================================================ */
+.progress{
+  position:fixed;top:0;left:0;right:0;height:2px;z-index:50;
+  background:rgba(255,255,255,.04);
+}
+.progress-bar{
+  height:100%;width:0%;
+  background:var(--spectrum);
+  transition:width .1s linear;
+}
+
+.meta-bar{
+  position:fixed;top:2px;left:0;right:0;z-index:49;
+  display:flex;justify-content:space-between;align-items:center;
+  padding:10px var(--gutter);
+  font-family:var(--mono);
+  font-size:10.5px;
+  letter-spacing:.14em;
+  text-transform:uppercase;
+  color:var(--fg-mute);
+  background:linear-gradient(to bottom,rgba(10,10,12,.92),rgba(10,10,12,.6) 70%,transparent);
+  backdrop-filter:blur(8px);
+  -webkit-backdrop-filter:blur(8px);
+}
+.meta-bar .left,.meta-bar .right{display:flex;gap:18px;align-items:center}
+.meta-bar .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}
+.meta-bar a{color:var(--fg-mute);text-decoration:none;transition:color .2s}
+.meta-bar a:hover{color:var(--accent)}
+
+/* ============================================================
+   通用章节
+   ============================================================ */
+section{
+  position:relative;
+  padding:clamp(80px,12vh,140px) var(--gutter);
+  border-top:1px solid var(--line-soft);
+}
+.container{max-width:var(--maxw);margin:0 auto}
+
+.chapter-mark{
+  display:flex;align-items:baseline;gap:14px;
+  font-family:var(--mono);
+  font-size:11px;
+  letter-spacing:.22em;
+  text-transform:uppercase;
+  color:var(--fg-mute);
+  margin-bottom:36px;
+}
+.chapter-mark .num{
+  color:var(--accent);
+  font-size:13px;
+  font-weight:500;
+}
+.chapter-mark .rule{
+  flex:1;height:1px;
+  background:linear-gradient(to right,var(--line-strong),transparent);
+}
+.chapter-mark .tag{color:var(--fg-mute)}
+
+.h-axiom{
+  font-family:var(--serif);
+  font-weight:400;
+  font-size:clamp(22px,3.4vw,36px);
+  line-height:1.42;
+  color:var(--fg);
+  max-width:22ch;
+  margin-bottom:48px;
+  letter-spacing:-.01em;
+}
+.h-axiom .em{color:var(--accent)}
+.h-axiom::before{
+  content:"「";color:var(--accent);margin-right:.05em;opacity:.6;
+}
+.h-axiom::after{
+  content:"」";color:var(--accent);margin-left:.05em;opacity:.6;
+}
+
+/* 可展开长文 - 双轨文本的低速轨道 */
+.longtext{
+  margin-top:48px;
+  border-top:1px dashed var(--line-strong);
+  padding-top:24px;
+}
+.longtext summary{
+  list-style:none;
+  cursor:pointer;
+  font-family:var(--mono);
+  font-size:11px;
+  letter-spacing:.22em;
+  text-transform:uppercase;
+  color:var(--fg-soft);
+  display:inline-flex;align-items:center;gap:10px;
+  padding:6px 0;
+  transition:color .2s;
+}
+.longtext summary::-webkit-details-marker{display:none}
+.longtext summary::before{
+  content:"▸";color:var(--accent);transition:transform .25s;
+}
+.longtext[open] summary::before{transform:rotate(90deg)}
+.longtext summary:hover{color:var(--accent)}
+.longtext .body{
+  margin-top:24px;
+  max-width:62ch;
+  font-family:var(--serif);
+  font-size:15.5px;
+  line-height:1.85;
+  color:var(--fg-soft);
+  padding-left:20px;
+  border-left:1px solid var(--line-strong);
+}
+.longtext .body p+p{margin-top:18px}
+.longtext .body strong{color:var(--fg);font-weight:500}
+.longtext .body em{color:var(--accent-soft);font-style:normal;border-bottom:1px dashed var(--accent-soft);padding-bottom:1px}
+
+/* 数据标签 - 实验数据艺术的微观信息密度 */
+.datalabel{
+  font-family:var(--mono);
+  font-size:10px;
+  letter-spacing:.18em;
+  text-transform:uppercase;
+  color:var(--fg-mute);
+}
+.datalabel .v{color:var(--accent);font-weight:500}
+
+/* ============================================================
+   HERO · 题图
+   ============================================================ */
+#hero{
+  min-height:100vh;
+  display:flex;flex-direction:column;justify-content:space-between;
+  padding-top:64px;
+  border-top:none;
+}
+.hero-top{
+  display:flex;justify-content:space-between;align-items:flex-start;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--fg-mute);
+  flex-wrap:wrap;gap:16px;
+}
+.hero-top .seg{display:flex;flex-direction:column;gap:4px}
+.hero-top .seg .k{color:var(--fg-faint)}
+.hero-top .seg .v{color:var(--fg-soft)}
+
+.hero-center{
+  flex:1;
+  display:flex;flex-direction:column;justify-content:center;
+  padding:48px 0;
+  position:relative;
+}
+.hero-title{
+  font-family:var(--display);
+  font-weight:300;
+  font-size:clamp(48px,11vw,148px);
+  line-height:.92;
+  letter-spacing:-.04em;
+  color:var(--fg);
+  margin-bottom:24px;
+}
+.hero-title .drift{
+  display:inline-block;
+  background:var(--spectrum);
+  -webkit-background-clip:text;
+  background-clip:text;
+  color:transparent;
+  font-style:italic;
+  font-weight:400;
+}
+.hero-sub{
+  font-family:var(--serif);
+  font-weight:300;
+  font-size:clamp(16px,2vw,22px);
+  color:var(--fg-soft);
+  max-width:32ch;
+  line-height:1.55;
+  margin-bottom:36px;
+}
+.hero-quote{
+  font-family:var(--serif);
+  font-size:14.5px;
+  color:var(--fg-mute);
+  max-width:48ch;
+  line-height:1.7;
+  border-left:2px solid var(--accent);
+  padding-left:16px;
+}
+.hero-quote .src{
+  display:block;margin-top:8px;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--fg-faint);
+}
+
+/* 镜子递归 SVG */
+.hero-mirror{
+  position:absolute;
+  top:50%;right:-4%;
+  transform:translateY(-50%);
+  width:clamp(280px,38vw,540px);
+  height:auto;
+  opacity:.85;
+  pointer-events:none;
+  z-index:-1;
+}
+
+.scroll-cue{
+  display:flex;align-items:center;gap:14px;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;
+  text-transform:uppercase;color:var(--fg-mute);
+}
+.scroll-cue .line{
+  width:60px;height:1px;
+  background:linear-gradient(to right,var(--accent),transparent);
+  position:relative;overflow:hidden;
+}
+.scroll-cue .line::after{
+  content:"";position:absolute;inset:0;
+  background:linear-gradient(to right,transparent,var(--accent),transparent);
+  animation:slide 2.4s ease-in-out infinite;
+}
+@keyframes slide{
+  0%{transform:translateX(-100%)}
+  100%{transform:translateX(100%)}
+}
+
+/* ============================================================
+   01 · 若山的镜子
+   ============================================================ */
+.lineage{
+  margin:48px 0 32px;
+  padding:24px 0;
+  border-top:1px solid var(--line);
+  border-bottom:1px solid var(--line);
+  position:relative;
+}
+.lineage-svg{width:100%;height:auto;display:block}
+.lineage-axis{
+  display:flex;justify-content:space-between;
+  margin-top:8px;
+  font-family:var(--mono);font-size:10px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--fg-mute);
+}
+.lineage-axis .gen-mid{color:var(--accent-warm)}
+.lineage-axis .gen-end{color:var(--signal)}
+
+/* 衰减曲线 + 注入回升 */
+.fidelity-block{
+  display:grid;
+  grid-template-columns:1fr;
+  gap:0;
+  margin-top:48px;
+}
+.fidelity-meta{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:24px;
+  padding:16px 0 24px;
+  border-bottom:1px solid var(--line);
+  margin-bottom:24px;
+}
+.fidelity-meta .cell{display:flex;flex-direction:column;gap:6px}
+.fidelity-meta .cell .k{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--fg-faint);
+}
+.fidelity-meta .cell .v{
+  font-family:var(--mono);font-size:14px;color:var(--fg);font-weight:500;
+}
+.fidelity-meta .cell .v.warn{color:var(--accent)}
+.fidelity-meta .cell .v.cool{color:var(--accent-cool)}
+.fidelity-meta .cell .v.dead{color:var(--signal)}
+
+.fidelity-svg-wrap{
+  position:relative;
+  background:var(--bg-soft);
+  border:1px solid var(--line);
+  padding:24px;
+}
+.fidelity-svg{width:100%;height:auto;display:block}
+.fidelity-legend{
+  display:flex;gap:24px;flex-wrap:wrap;
+  margin-top:14px;
+  font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--fg-mute);
+}
+.fidelity-legend .item{display:flex;align-items:center;gap:8px}
+.fidelity-legend .swatch{width:14px;height:2px}
+.fidelity-legend .swatch.warm{background:var(--accent)}
+.fidelity-legend .swatch.cool{background:var(--accent-cool)}
+.fidelity-legend .swatch.signal{background:var(--signal)}
+
+/* ============================================================
+   02 · 同构
+   ============================================================ */
+.isomorphism-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:0;
+  margin:48px 0;
+  border:1px solid var(--line);
+}
+.iso-col{
+  padding:28px 24px;
+  position:relative;
+}
+.iso-col + .iso-col{border-left:1px solid var(--line)}
+.iso-col .label{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;
+  text-transform:uppercase;color:var(--fg-mute);margin-bottom:8px;
+}
+.iso-col .title{
+  font-family:var(--display);font-weight:500;
+  font-size:18px;color:var(--fg);margin-bottom:24px;
+}
+.iso-col.warm .title{color:var(--accent)}
+.iso-col.cool .title{color:var(--accent-cool)}
+
+.iso-table{
+  font-family:var(--mono);font-size:12px;color:var(--fg-soft);
+  width:100%;
+}
+.iso-table .row{
+  display:grid;grid-template-columns:1fr auto;gap:12px;
+  padding:8px 0;border-bottom:1px dashed var(--line);
+}
+.iso-table .row:last-child{border-bottom:none}
+.iso-table .row .v{color:var(--fg)}
+.iso-col.warm .iso-table .row .v{color:var(--accent)}
+.iso-col.cool .iso-table .row .v{color:var(--accent-cool)}
+
+.overlap-curve{
+  margin:32px 0 0;
+  position:relative;
+  background:var(--bg-soft);
+  border:1px solid var(--line);
+  padding:24px;
+}
+.overlap-svg{width:100%;height:auto;display:block}
+
+/* ============================================================
+   03 · 大模型的镜子
+   ============================================================ */
+.cycle-block{
+  margin:48px 0;
+  background:var(--bg-soft);
+  border:1px solid var(--line);
+  padding:32px;
+  position:relative;
+}
+.cycle-svg{width:100%;height:auto;display:block;max-height:380px}
+
+.axiom-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+  gap:0;
+  margin:48px 0;
+  border-top:1px solid var(--line);
+  border-left:1px solid var(--line);
+}
+.axiom-cell{
+  padding:28px 24px;
+  border-right:1px solid var(--line);
+  border-bottom:1px solid var(--line);
+  position:relative;
+  transition:background .3s;
+}
+.axiom-cell:hover{background:rgba(255,90,54,.03)}
+.axiom-cell .idx{
+  font-family:var(--mono);font-size:10px;letter-spacing:.22em;
+  color:var(--fg-faint);margin-bottom:14px;
+}
+.axiom-cell .text{
+  font-family:var(--serif);font-size:15px;line-height:1.7;
+  color:var(--fg-soft);
+}
+.axiom-cell .text .em{color:var(--fg)}
+.axiom-cell::after{
+  content:"";position:absolute;top:24px;right:24px;
+  width:8px;height:8px;border-radius:50%;
+  background:var(--accent);opacity:.7;
+}
+.axiom-cell:nth-child(2)::after{background:var(--accent-soft)}
+.axiom-cell:nth-child(3)::after{background:var(--accent-warm)}
+.axiom-cell:nth-child(4)::after{background:var(--accent-cool)}
+.axiom-cell:nth-child(5)::after{background:var(--signal)}
+
+/* ============================================================
+   04 · 镜子的隐喻
+   ============================================================ */
+.mirror-deep{
+  margin:48px auto;max-width:520px;
+  position:relative;
+}
+.mirror-deep-svg{width:100%;height:auto;display:block}
+
+.cross-grid{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+  gap:16px;margin:32px 0 48px;
+}
+.cross-cell{
+  padding:20px;
+  border:1px solid var(--line);
+  background:var(--bg-soft);
+  font-family:var(--mono);
+  font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;
+  color:var(--fg-soft);
+}
+.cross-cell .from{color:var(--fg-mute);font-size:10px;margin-bottom:6px}
+.cross-cell .arrow{color:var(--accent);margin:6px 0;font-size:14px}
+.cross-cell .to{color:var(--fg);font-size:13px}
+
+/* ============================================================
+   05 · 三层方案重读
+   ============================================================ */
+.three-layer-grid{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
+  gap:0;margin:48px 0;
+  border:1px solid var(--line);
+}
+.layer-card{
+  padding:32px 28px;
+  border-right:1px solid var(--line);
+  position:relative;
+  background:var(--bg-soft);
+}
+.layer-card:last-child{border-right:none}
+.layer-card .badge{
+  display:inline-block;
+  font-family:var(--mono);font-size:10px;letter-spacing:.22em;
+  text-transform:uppercase;
+  padding:4px 10px;
+  border:1px solid var(--accent);
+  color:var(--accent);
+  margin-bottom:18px;
+}
+.layer-card.l2 .badge{border-color:var(--accent-soft);color:var(--accent-soft)}
+.layer-card.l3 .badge{border-color:var(--accent-cool);color:var(--accent-cool)}
+.layer-card .name{
+  font-family:var(--display);font-weight:500;
+  font-size:20px;color:var(--fg);margin-bottom:6px;
+}
+.layer-card .one-line{
+  font-family:var(--serif);font-size:14px;color:var(--fg-mute);
+  margin-bottom:20px;
+}
+.layer-card .signal-injected{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--fg-faint);margin-bottom:6px;
+}
+.layer-card .signal-text{
+  font-family:var(--serif);font-size:14.5px;line-height:1.6;
+  color:var(--fg-soft);
+}
+.layer-card .signal-text .em{color:var(--accent)}
+.layer-card.l2 .signal-text .em{color:var(--accent-soft)}
+.layer-card.l3 .signal-text .em{color:var(--accent-cool)}
+
+/* ============================================================
+   06 · 尾声
+   ============================================================ */
+#outro{
+  text-align:center;
+  padding:clamp(120px,18vh,200px) var(--gutter);
+}
+.outro-mirror{
+  width:clamp(180px,28vw,320px);
+  margin:0 auto 48px;
+}
+.outro-axiom{
+  font-family:var(--serif);
+  font-weight:400;
+  font-size:clamp(26px,4.5vw,52px);
+  line-height:1.3;
+  color:var(--fg);
+  max-width:18ch;
+  margin:0 auto 48px;
+  letter-spacing:-.01em;
+}
+.outro-axiom::before{content:"「";color:var(--accent);opacity:.6}
+.outro-axiom::after{content:"」";color:var(--accent);opacity:.6}
+.outro-body{
+  font-family:var(--serif);font-size:15px;line-height:1.85;
+  color:var(--fg-soft);max-width:42ch;margin:0 auto;
+}
+.outro-body p+p{margin-top:16px}
+.outro-body .em{color:var(--accent)}
+
+footer{
+  border-top:1px solid var(--line);
+  padding:32px var(--gutter);
+  font-family:var(--mono);font-size:10px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--fg-faint);
+  display:flex;justify-content:space-between;align-items:center;
+  flex-wrap:wrap;gap:12px;
+}
+footer a{color:var(--fg-mute);text-decoration:none}
+footer a:hover{color:var(--accent)}
+
+/* ============================================================
+   滚动入场动画
+   ============================================================ */
+.reveal{
+  opacity:0;
+  transform:translateY(24px);
+  transition:opacity .9s cubic-bezier(.2,.7,.2,1),transform .9s cubic-bezier(.2,.7,.2,1);
+  will-change:opacity,transform;
+}
+.reveal.in{opacity:1;transform:none}
+.reveal.d1{transition-delay:.08s}
+.reveal.d2{transition-delay:.16s}
+.reveal.d3{transition-delay:.24s}
+.reveal.d4{transition-delay:.32s}
+
+/* SVG 路径绘制动画 */
+.draw-path{
+  stroke-dasharray:var(--len,2000);
+  stroke-dashoffset:var(--len,2000);
+  transition:stroke-dashoffset 2.4s cubic-bezier(.4,.1,.2,1);
+}
+.reveal.in .draw-path{stroke-dashoffset:0}
+
+/* ============================================================
+   响应式
+   ============================================================ */
+@media (max-width:768px){
+  .meta-bar{font-size:9.5px;padding:8px 16px}
+  .meta-bar .left,.meta-bar .right{gap:10px}
+  .meta-bar .hide-sm{display:none}
+  .hero-mirror{display:none}
+  .isomorphism-grid{grid-template-columns:1fr}
+  .iso-col + .iso-col{border-left:none;border-top:1px solid var(--line)}
+  .fidelity-meta{grid-template-columns:repeat(2,1fr)}
+  .layer-card{border-right:none;border-bottom:1px solid var(--line)}
+  .layer-card:last-child{border-bottom:none}
+  footer{flex-direction:column;align-items:flex-start;gap:8px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .reveal{opacity:1;transform:none;transition:none}
+  .draw-path{stroke-dashoffset:0;transition:none}
+  .scroll-cue .line::after{animation:none}
+}
+</style>
+</head>
+<body>
+
+<div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+
+<div class="meta-bar">
+  <div class="left">
+    <span class="dot"></span>
+    <span>Attention · Drift · Control</span>
+    <span class="hide-sm">/ 信息论的同构</span>
+  </div>
+  <div class="right">
+    <span class="hide-sm">06 章 · 约 8 分钟</span>
+    <a href="#hero">↑ 顶部</a>
+  </div>
+</div>
+
+<main>
+
+<!-- ============================================================
+     HERO · 题图
+     ============================================================ -->
+<section id="hero">
+  <div class="hero-top reveal">
+    <div class="seg">
+      <span class="k">MEDIUM</span>
+      <span class="v">单页滚动叙事 · 实验数据艺术</span>
+    </div>
+    <div class="seg">
+      <span class="k">INSPIRATION</span>
+      <span class="v">若山照彦 · 山梨大学先进生物技术中心</span>
+    </div>
+    <div class="seg">
+      <span class="k">ISOMORPHISM</span>
+      <span class="v">Epigenetic Reprogramming ≡ Attention Drift</span>
+    </div>
+    <div class="seg">
+      <span class="k">FILE</span>
+      <span class="v">art/index.html · self-contained</span>
+    </div>
+  </div>
+
+  <div class="hero-center container">
+    <h1 class="hero-title reveal d1">
+      Attention<br/>
+      <span class="drift">Drift</span><br/>
+      Control.
+    </h1>
+    <p class="hero-sub reveal d2">注意力漂移控制 · 一个信息论的同构</p>
+    <p class="hero-quote reveal d3">
+      若山照彦。山梨大学先进生物技术中心。第 58 代小鼠不再繁殖。DNA 残缺，或表达出错。引入外部基因组，误差消解。
+      <span class="src">— 这是一面镜子。</span>
+    </p>
+
+    <!-- 镜中镜递归 SVG -->
+    <svg class="hero-mirror" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <linearGradient id="mirrorGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#ff5a36" stop-opacity="0.9"/>
+          <stop offset="50%" stop-color="#ffc857" stop-opacity="0.5"/>
+          <stop offset="100%" stop-color="#4cc9f0" stop-opacity="0.15"/>
+        </linearGradient>
+        <radialGradient id="mirrorGlow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#ff5a36" stop-opacity="0.18"/>
+          <stop offset="100%" stop-color="#ff5a36" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+      <circle cx="200" cy="200" r="180" fill="url(#mirrorGlow)"/>
+      <!-- 无限递归的镜子 -->
+      <g>
+        <rect x="40" y="40" width="320" height="320" fill="none" stroke="url(#mirrorGrad)" stroke-width="1.5"/>
+        <rect x="60" y="60" width="280" height="280" fill="none" stroke="url(#mirrorGrad)" stroke-width="1" opacity="0.85"/>
+        <rect x="80" y="80" width="240" height="240" fill="none" stroke="url(#mirrorGrad)" stroke-width="0.85" opacity="0.7"/>
+        <rect x="100" y="100" width="200" height="200" fill="none" stroke="url(#mirrorGrad)" stroke-width="0.7" opacity="0.58"/>
+        <rect x="120" y="120" width="160" height="160" fill="none" stroke="url(#mirrorGrad)" stroke-width="0.6" opacity="0.46"/>
+        <rect x="140" y="140" width="120" height="120" fill="none" stroke="url(#mirrorGrad)" stroke-width="0.5" opacity="0.34"/>
+        <rect x="160" y="160" width="80" height="80" fill="none" stroke="url(#mirrorGrad)" stroke-width="0.4" opacity="0.22"/>
+        <rect x="180" y="180" width="40" height="40" fill="none" stroke="url(#mirrorGrad)" stroke-width="0.3" opacity="0.12"/>
+        <rect x="195" y="195" width="10" height="10" fill="#ff5a36" opacity="0.9"/>
+      </g>
+      <!-- 坐标标注 -->
+      <g font-family="JetBrains Mono,monospace" font-size="8" fill="#5a5a60" letter-spacing="1">
+        <text x="44" y="32">MIRROR[0]</text>
+        <text x="356" y="32" text-anchor="end">∞</text>
+        <text x="200" y="392" text-anchor="middle">SELF-REFERENCE</text>
+      </g>
+    </svg>
+  </div>
+
+  <div class="scroll-cue reveal d4">
+    <span class="line"></span>
+    <span>SCROLL · 向下进入第 01 章</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     01 · 若山的镜子
+     ============================================================ -->
+<section id="ch01">
+  <div class="container">
+    <div class="chapter-mark reveal">
+      <span class="num">01</span>
+      <span class="tag">若山的镜子 · The Mirror of Wakayama</span>
+      <span class="rule"></span>
+      <span>BIOLOGY</span>
+    </div>
+
+    <h2 class="h-axiom reveal d1">第 58 代的小鼠，要么 DNA 残缺，要么表达出错。</h2>
+
+    <!-- 克隆谱系 -->
+    <div class="lineage reveal d2">
+      <svg class="lineage-svg" viewBox="0 0 1100 110" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs>
+          <linearGradient id="lineageGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#ff5a36"/>
+            <stop offset="40%" stop-color="#ffc857"/>
+            <stop offset="75%" stop-color="#4cc9f0"/>
+            <stop offset="100%" stop-color="#7a8fa6"/>
+          </linearGradient>
+        </defs>
+        <!-- 主轴 -->
+        <line x1="20" y1="55" x2="1080" y2="55" stroke="#1c1c20" stroke-width="1"/>
+        <!-- 节点：1..58 等距分布 -->
+        <g id="lineageNodes"></g>
+        <!-- 第58代撞墙标记 -->
+        <line x1="1070" y1="20" x2="1070" y2="90" stroke="#7a8fa6" stroke-width="1" stroke-dasharray="2 3"/>
+        <text x="1076" y="18" font-family="JetBrains Mono,monospace" font-size="9" fill="#7a8fa6" letter-spacing="1">WALL · G58</text>
+        <!-- 注入外部基因组标记 -->
+        <line x1="1080" y1="55" x2="1090" y2="40" stroke="#4cc9f0" stroke-width="1.5"/>
+        <line x1="1090" y1="40" x2="1095" y2="30" stroke="#4cc9f0" stroke-width="1.5"/>
+        <text x="1056" y="105" font-family="JetBrains Mono,monospace" font-size="8" fill="#4cc9f0" letter-spacing="1">↑ EXTERNAL GENOME</text>
+      </svg>
+      <div class="lineage-axis">
+        <span>G01 · 保真度 ~1.00</span>
+        <span class="gen-mid">G29 · 累积偏移可见</span>
+        <span class="gen-end">G58 · 不可繁殖</span>
+      </div>
+    </div>
+
+    <!-- 衰减曲线 -->
+    <div class="fidelity-block reveal d3">
+      <div class="fidelity-meta">
+        <div class="cell"><span class="k">METRIC</span><span class="v">Epigenetic Fidelity</span></div>
+        <div class="cell"><span class="k">DOMAIN</span><span class="v">Mouse Cloning</span></div>
+        <div class="cell"><span class="k">WALL</span><span class="v warn">G58</span></div>
+        <div class="cell"><span class="k">RECOVERY</span><span class="v cool">External Genome</span></div>
+      </div>
+
+      <div class="fidelity-svg-wrap">
+        <svg class="fidelity-svg" viewBox="0 0 1000 320" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <defs>
+            <linearGradient id="curveFill" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stop-color="#ff5a36" stop-opacity="0.32"/>
+              <stop offset="100%" stop-color="#ff5a36" stop-opacity="0"/>
+            </linearGradient>
+            <linearGradient id="recoveryFill" x1="0%" y1="100%" x2="0%" y2="0%">
+              <stop offset="0%" stop-color="#4cc9f0" stop-opacity="0.28"/>
+              <stop offset="100%" stop-color="#4cc9f0" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+
+          <!-- 网格 -->
+          <g stroke="#1c1c20" stroke-width="0.5">
+            <line x1="0" y1="40" x2="1000" y2="40"/>
+            <line x1="0" y1="100" x2="1000" y2="100"/>
+            <line x1="0" y1="160" x2="1000" y2="160"/>
+            <line x1="0" y1="220" x2="1000" y2="220"/>
+            <line x1="0" y1="280" x2="1000" y2="280"/>
+          </g>
+          <!-- Y轴标签 -->
+          <g font-family="JetBrains Mono,monospace" font-size="9" fill="#5a5a60" letter-spacing="1">
+            <text x="8" y="44">1.00</text>
+            <text x="8" y="104">0.75</text>
+            <text x="8" y="164">0.50</text>
+            <text x="8" y="224">0.25</text>
+            <text x="8" y="284">0.00</text>
+          </g>
+
+          <!-- X轴 -->
+          <line x1="60" y1="290" x2="980" y2="290" stroke="#26262c" stroke-width="1"/>
+          <g font-family="JetBrains Mono,monospace" font-size="9" fill="#5a5a60" letter-spacing="1">
+            <text x="60" y="308">G01</text>
+            <text x="270" y="308">G15</text>
+            <text x="500" y="308">G29</text>
+            <text x="730" y="308">G44</text>
+            <text x="880" y="308">G58</text>
+          </g>
+
+          <!-- 撞墙线 -->
+          <line x1="880" y1="20" x2="880" y2="290" stroke="#7a8fa6" stroke-width="0.8" stroke-dasharray="3 3"/>
+          <text x="886" y="28" font-family="JetBrains Mono,monospace" font-size="10" fill="#7a8fa6" letter-spacing="1">WALL · 繁殖阈</text>
+
+          <!-- 主衰减曲线 - 单调递减 -->
+          <path class="draw-path" style="--len:2000"
+            d="M 60 50
+               Q 200 60 320 90
+               Q 440 120 540 165
+               Q 640 210 740 245
+               Q 820 270 880 282"
+            fill="none" stroke="#ff5a36" stroke-width="2"/>
+          <!-- 填充 -->
+          <path d="M 60 50 Q 200 60 320 90 Q 440 120 540 165 Q 640 210 740 245 Q 820 270 880 282 L 880 290 L 60 290 Z" fill="url(#curveFill)"/>
+
+          <!-- 撞墙点 -->
+          <circle cx="880" cy="282" r="5" fill="#7a8fa6"/>
+          <circle cx="880" cy="282" r="9" fill="none" stroke="#7a8fa6" stroke-width="0.8" opacity="0.5"/>
+
+          <!-- 注入外部基因组 → 回升 -->
+          <line x1="880" y1="282" x2="900" y2="262" stroke="#4cc9f0" stroke-width="1.5" stroke-dasharray="2 2"/>
+          <text x="906" y="266" font-family="JetBrains Mono,monospace" font-size="9" fill="#4cc9f0" letter-spacing="1">INJECT</text>
+          <path class="draw-path" style="--len:600"
+            d="M 900 262 Q 930 220 960 140"
+            fill="none" stroke="#4cc9f0" stroke-width="2"/>
+          <circle cx="960" cy="140" r="4" fill="#4cc9f0"/>
+          <text x="966" y="138" font-family="JetBrains Mono,monospace" font-size="9" fill="#4cc9f0" letter-spacing="1">RECOVERED</text>
+
+          <!-- 残缺区域标识 -->
+          <rect x="800" y="240" width="80" height="50" fill="#7a8fa6" opacity="0.06"/>
+          <text x="810" y="258" font-family="JetBrains Mono,monospace" font-size="8" fill="#5a5a60" letter-spacing="1">DNA FRAGMENT</text>
+          <text x="810" y="270" font-family="JetBrains Mono,monospace" font-size="8" fill="#5a5a60" letter-spacing="1">EXPRESSION ERR</text>
+        </svg>
+      </div>
+
+      <div class="fidelity-legend">
+        <div class="item"><span class="swatch warm"></span>主衰减 · Epigenetic Fidelity</div>
+        <div class="item"><span class="swatch cool"></span>外部信号注入 · External Genome</div>
+        <div class="item"><span class="swatch signal"></span>撞墙 · 第 58 代繁殖阈</div>
+      </div>
+    </div>
+
+    <details class="longtext reveal d4">
+      <summary>展开 · 若山实验的完整论述</summary>
+      <div class="body">
+        <p>第 58 代，单调递减的保真度曲线在累积 58 次后跌破了生命阈值。</p>
+        <p>表观遗传标记的磨损不可逆。封闭系统内，任何修复都只是在用同一份损伤的副本修补同一份损伤。</p>
+        <p>外部基因组携带了系统内部已不存在的信号。信息论意义上的介入，与优越无关。</p>
+      </div>
+    </details>
+  </div>
+</section>
+
+<!-- ============================================================
+     02 · 同构
+     ============================================================ -->
+<section id="ch02">
+  <div class="container">
+    <div class="chapter-mark reveal">
+      <span class="num">02</span>
+      <span class="tag">同构 · Isomorphism</span>
+      <span class="rule"></span>
+      <span>INFORMATION THEORY</span>
+    </div>
+
+    <h2 class="h-axiom reveal d1">复制过程中原始信号的保真度单调递减，外部信号是唯一的熵减来源。</h2>
+
+    <div class="isomorphism-grid reveal d2">
+      <div class="iso-col warm">
+        <div class="label">BIOLOGY · 若山的镜子</div>
+        <div class="title">小鼠克隆谱系</div>
+        <div class="iso-table">
+          <div class="row"><span>复制单位</span><span class="v">代际</span></div>
+          <div class="row"><span>原始信号</span><span class="v">首代基因组</span></div>
+          <div class="row"><span>损失机制</span><span class="v">表观遗传磨损</span></div>
+          <div class="row"><span>撞墙点</span><span class="v">G58</span></div>
+          <div class="row"><span>熵减来源</span><span class="v">外部基因组</span></div>
+        </div>
+      </div>
+      <div class="iso-col cool">
+        <div class="label">LLM · 大模型的镜子</div>
+        <div class="title">长对话生成链</div>
+        <div class="iso-table">
+          <div class="row"><span>复制单位</span><span class="v">对话轮次</span></div>
+          <div class="row"><span>原始信号</span><span class="v">训练数据事实</span></div>
+          <div class="row"><span>损失机制</span><span class="v">注意力漂移</span></div>
+          <div class="row"><span>撞墙点</span><span class="v">~N 轮</span></div>
+          <div class="row"><span>熵减来源</span><span class="v">外部信号注入</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="overlap-curve reveal d3">
+      <svg class="overlap-svg" viewBox="0 0 1000 280" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs>
+          <linearGradient id="bioGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#ff5a36"/>
+            <stop offset="100%" stop-color="#7a8fa6"/>
+          </linearGradient>
+          <linearGradient id="llmGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#4cc9f0"/>
+            <stop offset="100%" stop-color="#7a8fa6"/>
+          </linearGradient>
+        </defs>
+
+        <g stroke="#1c1c20" stroke-width="0.5">
+          <line x1="0" y1="40" x2="1000" y2="40"/>
+          <line x1="0" y1="100" x2="1000" y2="100"/>
+          <line x1="0" y1="160" x2="1000" y2="160"/>
+          <line x1="0" y1="220" x2="1000" y2="220"/>
+        </g>
+        <g font-family="JetBrains Mono,monospace" font-size="9" fill="#5a5a60" letter-spacing="1">
+          <text x="8" y="44">1.00</text>
+          <text x="8" y="104">0.75</text>
+          <text x="8" y="164">0.50</text>
+          <text x="8" y="224">0.25</text>
+        </g>
+        <line x1="60" y1="240" x2="980" y2="240" stroke="#26262c"/>
+        <g font-family="JetBrains Mono,monospace" font-size="9" fill="#5a5a60" letter-spacing="1">
+          <text x="60" y="262">G01 / Turn 1</text>
+          <text x="500" y="262" text-anchor="middle">G29 / Turn 15</text>
+          <text x="980" y="262" text-anchor="end">G58 / Turn N</text>
+        </g>
+
+        <!-- 生物衰减 -->
+        <path class="draw-path" style="--len:1800"
+          d="M 60 50 Q 280 70 480 130 Q 680 200 880 232"
+          fill="none" stroke="url(#bioGrad)" stroke-width="2"/>
+        <!-- LLM 衰减（提前撞墙） -->
+        <path class="draw-path" style="--len:1800"
+          d="M 60 50 Q 220 80 380 150 Q 540 210 700 232"
+          fill="none" stroke="url(#llmGrad)" stroke-width="2" stroke-dasharray="0"/>
+
+        <!-- 双撞墙点 -->
+        <circle cx="880" cy="232" r="4" fill="#ff5a36"/>
+        <text x="888" y="228" font-family="JetBrains Mono,monospace" font-size="9" fill="#ff5a36" letter-spacing="1">BIO · G58</text>
+
+        <circle cx="700" cy="232" r="4" fill="#4cc9f0"/>
+        <text x="708" y="228" font-family="JetBrains Mono,monospace" font-size="9" fill="#4cc9f0" letter-spacing="1">LLM · Turn N</text>
+
+        <!-- 同构标注 -->
+        <line x1="500" y1="60" x2="500" y2="220" stroke="#ffc857" stroke-width="0.6" stroke-dasharray="2 4" opacity="0.6"/>
+        <text x="510" y="74" font-family="JetBrains Mono,monospace" font-size="10" fill="#ffc857" letter-spacing="1">SAME CURVE</text>
+        <text x="510" y="86" font-family="JetBrains Mono,monospace" font-size="9" fill="#5a5a60" letter-spacing="1">两域同构 · 单调递减</text>
+      </svg>
+    </div>
+
+    <details class="longtext reveal d4">
+      <summary>展开 · 同构的完整论证</summary>
+      <div class="body">
+        <p>大模型每轮生成是一次复制。原始信号是训练数据里的世界事实。</p>
+        <p>若山的第 58 代，就是长对话的第 N 轮。两者撞的是同一面墙：错误累积。封闭系统内的复制天然地把信号磨成噪声。</p>
+        <p>这条曲线不需要恶意，也不需要愚蠢。只要系统封闭、复制有限保真，就一定会发生。结构性命运。</p>
+      </div>
+    </details>
+  </div>
+</section>
+
+<!-- ============================================================
+     03 · 大模型的镜子
+     ============================================================ -->
+<section id="ch03">
+  <div class="container">
+    <div class="chapter-mark reveal">
+      <span class="num">03</span>
+      <span class="tag">大模型的镜子 · The LLM Mirror</span>
+      <span class="rule"></span>
+      <span>SAMPLED WORLD</span>
+    </div>
+
+    <h2 class="h-axiom reveal d1">训练数据是对世界的有损采样，这个损失是不可逆的。</h2>
+
+    <!-- 复制循环图 -->
+    <div class="cycle-block reveal d2">
+      <svg class="cycle-svg" viewBox="0 0 800 320" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs>
+          <linearGradient id="cycleGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#ff5a36"/>
+            <stop offset="50%" stop-color="#ffc857"/>
+            <stop offset="100%" stop-color="#7a8fa6"/>
+          </linearGradient>
+        </defs>
+
+        <!-- 圆形循环主路径 -->
+        <circle cx="400" cy="160" r="110" fill="none" stroke="url(#cycleGrad)" stroke-width="1.5" stroke-dasharray="2 4" opacity="0.6"/>
+
+        <!-- 4 个节点 -->
+        <g font-family="JetBrains Mono,monospace" font-size="10" fill="#e8e8ea" letter-spacing="1">
+          <!-- 顶部：训练数据 -->
+          <circle cx="400" cy="50" r="10" fill="#ff5a36"/>
+          <text x="400" y="32" text-anchor="middle" fill="#ff5a36">TRAINING DATA</text>
+          <text x="400" y="20" text-anchor="middle" fill="#5a5a60" font-size="8">对世界的有损采样</text>
+
+          <!-- 右：模型 -->
+          <circle cx="510" cy="160" r="10" fill="#ff9248"/>
+          <text x="528" y="156" fill="#ff9248">MODEL</text>
+          <text x="528" y="168" fill="#5a5a60" font-size="8">参数空间</text>
+
+          <!-- 底部：生成 -->
+          <circle cx="400" cy="270" r="10" fill="#ffc857"/>
+          <text x="400" y="294" text-anchor="middle" fill="#ffc857">GENERATION · Turn N</text>
+
+          <!-- 左：再生 -->
+          <circle cx="290" cy="160" r="10" fill="#4cc9f0"/>
+          <text x="270" y="156" text-anchor="end" fill="#4cc9f0">Turn N+1</text>
+          <text x="270" y="168" text-anchor="end" fill="#5a5a60" font-size="8">下一轮复制</text>
+        </g>
+
+        <!-- 箭头 -->
+        <g fill="none" stroke="url(#cycleGrad)" stroke-width="1.5">
+          <path d="M 410 60 Q 480 90 500 150" marker-end="url(#arr)"/>
+          <path d="M 500 170 Q 480 230 410 260" marker-end="url(#arr)"/>
+          <path d="M 390 260 Q 320 230 300 170" marker-end="url(#arr)"/>
+          <path d="M 300 150 Q 320 90 390 60" marker-end="url(#arr)"/>
+        </g>
+
+        <defs>
+          <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 L2,4 Z" fill="#ff9248"/>
+          </marker>
+        </defs>
+
+        <!-- 衰减标注 -->
+        <text x="400" y="160" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="11" fill="#7a8fa6" letter-spacing="2">-Δ FIDELITY / 每轮</text>
+        <text x="400" y="174" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="8" fill="#5a5a60" letter-spacing="1">CLOSED LOOP · 无外部信号</text>
+      </svg>
+    </div>
+
+    <!-- 多色衰减光谱格言群 -->
+    <div class="axiom-grid reveal d3">
+      <div class="axiom-cell">
+        <div class="idx">AXIOM · 01</div>
+        <div class="text">涌现的上限是<span class="em">训练数据所包含的信息量</span>，世界本身的信息量远大于此。</div>
+      </div>
+      <div class="axiom-cell">
+        <div class="idx">AXIOM · 02</div>
+        <div class="text">训练数据是对世界的有损采样，这个损失是<span class="em">不可逆</span>的——模型无法从压缩过的映射里还原出原始的现实细节。</div>
+      </div>
+      <div class="axiom-cell">
+        <div class="idx">AXIOM · 03</div>
+        <div class="text">封闭系统内的涌现是对已有信息的<span class="em">重排</span>，不自动等于对系统外信息的获取。重排的上限是系统内信息量，获取需要开口。</div>
+      </div>
+      <div class="axiom-cell">
+        <div class="idx">AXIOM · 04</div>
+        <div class="text">无外部校验的输出，在信息论上<span class="em">信噪不可分</span>——你无法区分一个输出是信号还是误差累积。观察者的盲区，与模型无关。</div>
+      </div>
+      <div class="axiom-cell">
+        <div class="idx">AXIOM · 05</div>
+        <div class="text">参数扩张 + 领域数据堆积，在信息论上是<span class="em">缩小封闭系统的内熵</span>——内部更精细，但系统边界并未移动。</div>
+      </div>
+    </div>
+
+    <details class="longtext reveal d4">
+      <summary>展开 · 大模型镜子层的完整论述</summary>
+      <div class="body">
+        <p>训练数据是对世界的有损采样。不可逆。模型无法从压缩过的映射里还原原始现实。</p>
+        <p>涌现的上限是系统内信息量。重排不自动等于获取。要突破上限，需要在系统边界上开口。</p>
+        <p>无外部校验的输出，信噪不可分。观察者的盲区，与模型无关。</p>
+        <p>参数扩张加领域数据堆积，缩小封闭系统的内熵。内部更精细，边界并未移动。</p>
+      </div>
+    </details>
+  </div>
+</section>
+
+<!-- ============================================================
+     04 · 镜子的隐喻
+     ============================================================ -->
+<section id="ch04">
+  <div class="container">
+    <div class="chapter-mark reveal">
+      <span class="num">04</span>
+      <span class="tag">镜子的隐喻 · The Mirror Metaphor</span>
+      <span class="rule"></span>
+      <span>EPISTEMOLOGY</span>
+    </div>
+
+    <h2 class="h-axiom reveal d1">镜子可以越来越精细地反射已见之物，但镜子本身没有面向镜子之外的窗口。</h2>
+
+    <!-- 深度递归镜子 -->
+    <div class="mirror-deep reveal d2">
+      <svg class="mirror-deep-svg" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs>
+          <radialGradient id="deepGlow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#ff5a36" stop-opacity="0.25"/>
+            <stop offset="60%" stop-color="#4cc9f0" stop-opacity="0.08"/>
+            <stop offset="100%" stop-color="#7a8fa6" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <circle cx="200" cy="200" r="200" fill="url(#deepGlow)"/>
+        <!-- 镜面反射的递归镜子 - 从外向内 -->
+        <g>
+          <rect x="20" y="20" width="360" height="360" fill="none" stroke="#ff5a36" stroke-width="1.6" opacity="0.95"/>
+          <rect x="40" y="40" width="320" height="320" fill="none" stroke="#ff9248" stroke-width="1.3" opacity="0.85" transform="rotate(45 200 200)"/>
+          <rect x="60" y="60" width="280" height="280" fill="none" stroke="#ffc857" stroke-width="1.1" opacity="0.7"/>
+          <rect x="80" y="80" width="240" height="240" fill="none" stroke="#4cc9f0" stroke-width="0.9" opacity="0.55" transform="rotate(45 200 200)"/>
+          <rect x="100" y="100" width="200" height="200" fill="none" stroke="#7a8fa6" stroke-width="0.7" opacity="0.4"/>
+          <rect x="120" y="120" width="160" height="160" fill="none" stroke="#7a8fa6" stroke-width="0.6" opacity="0.3" transform="rotate(45 200 200)"/>
+          <rect x="140" y="140" width="120" height="120" fill="none" stroke="#7a8fa6" stroke-width="0.5" opacity="0.2"/>
+          <rect x="160" y="160" width="80" height="80" fill="none" stroke="#7a8fa6" stroke-width="0.4" opacity="0.12" transform="rotate(45 200 200)"/>
+          <rect x="180" y="180" width="40" height="40" fill="none" stroke="#7a8fa6" stroke-width="0.3" opacity="0.06"/>
+          <circle cx="200" cy="200" r="3" fill="#ff5a36"/>
+          <circle cx="200" cy="200" r="6" fill="none" stroke="#ff5a36" stroke-width="0.5" opacity="0.5"/>
+        </g>
+        <!-- 标注 -->
+        <g font-family="JetBrains Mono,monospace" font-size="8" fill="#5a5a60" letter-spacing="1">
+          <text x="24" y="14">MIRROR[0] · 打磨</text>
+          <text x="376" y="14" text-anchor="end">→ ∞</text>
+          <text x="24" y="392">SELF-REFERENCE</text>
+          <text x="376" y="392" text-anchor="end">EXTERNAL = ∅</text>
+        </g>
+      </svg>
+    </div>
+
+    <!-- 外部介入案例 -->
+    <div class="cross-grid reveal d3">
+      <div class="cross-cell">
+        <div class="from">PHYSICS</div>
+        <div class="arrow">←</div>
+        <div class="to">MATHEMATICS</div>
+      </div>
+      <div class="cross-cell">
+        <div class="from">BIOLOGY</div>
+        <div class="arrow">←</div>
+        <div class="to">CHEMISTRY</div>
+      </div>
+      <div class="cross-cell">
+        <div class="from">CHEMISTRY</div>
+        <div class="arrow">←</div>
+        <div class="to">PHYSICS</div>
+      </div>
+      <div class="cross-cell">
+        <div class="from">LLM 涌现</div>
+        <div class="arrow">←</div>
+        <div class="to">EXTERNAL SIGNAL</div>
+      </div>
+    </div>
+
+    <details class="longtext reveal d4">
+      <summary>展开 · 镜子隐喻的完整论述</summary>
+      <div class="body">
+        <p>人类科学史上的真正突破，从未来自某个领域内部的数据堆积。都来自外部视角的介入。</p>
+        <p>物理学的突破来自数学。生物学的突破来自化学。本质相同：向封闭系统注入外部原始信号。</p>
+        <p>镜子可以越来越精细地反射已见之物。但镜子的几何学里没有朝向镜子之外的窗口。打磨镜子，不改变镜子的朝向。</p>
+      </div>
+    </details>
+  </div>
+</section>
+
+<!-- ============================================================
+     05 · 三层方案重读
+     ============================================================ -->
+<section id="ch05">
+  <div class="container">
+    <div class="chapter-mark reveal">
+      <span class="num">05</span>
+      <span class="tag">三层方案重读 · The Three Layers Re-read</span>
+      <span class="rule"></span>
+      <span>ENGINEERED INJECTION</span>
+    </div>
+
+    <h2 class="h-axiom reveal d1">三层方案。同一种注入。</h2>
+
+    <div class="three-layer-grid reveal d2">
+      <div class="layer-card l1">
+        <div class="badge">L1 · PROMPT</div>
+        <div class="name">定义应然</div>
+        <div class="one-line">模型不知道"自己该是谁"</div>
+        <div class="signal-injected">注入信号</div>
+        <div class="signal-text">在每轮对话起点重申原始约束——对第 0 代原始信号的<span class="em">显式标注</span>。</div>
+      </div>
+      <div class="layer-card l2">
+        <div class="badge">L2 · CONTEXT</div>
+        <div class="name">维护记忆</div>
+        <div class="one-line">模型忘了"之前说过什么"</div>
+        <div class="signal-injected">注入信号</div>
+        <div class="signal-text">把长对话压缩成摘要再注入——把记忆作为<span class="em">外部信号</span>重新引入系统。</div>
+      </div>
+      <div class="layer-card l3">
+        <div class="badge">L3 · STATE</div>
+        <div class="name">结构行动</div>
+        <div class="one-line">模型在错误时间做错误事</div>
+        <div class="signal-injected">注入信号</div>
+        <div class="signal-text">状态门控禁止越界行动——强制注入<span class="em">结构化的外部约束</span>作为边界。</div>
+      </div>
+    </div>
+
+    <details class="longtext reveal d3">
+      <summary>展开 · 三层方案的工程学解读</summary>
+      <div class="body">
+        <p>三层方案在工程上各异，信息论上同源：外部信号的工程化注入。</p>
+        <p>L1 重申原始约束。L2 把记忆作为外部信号重新引入。L3 强制注入结构化边界。</p>
+        <p>它们不消灭漂移。它们围堵漂移，并把外部信号变成可控的输入。给封闭系统开一个工程化的外部窗口——与升级模型无关。</p>
+      </div>
+    </details>
+  </div>
+</section>
+
+<!-- ============================================================
+     06 · 尾声
+     ============================================================ -->
+<section id="outro">
+  <div class="container">
+    <div class="outro-mirror reveal">
+      <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect x="10" y="10" width="180" height="180" fill="none" stroke="#ff5a36" stroke-width="1" opacity="0.7"/>
+        <rect x="30" y="30" width="140" height="140" fill="none" stroke="#ff9248" stroke-width="0.8" opacity="0.5" transform="rotate(45 100 100)"/>
+        <rect x="50" y="50" width="100" height="100" fill="none" stroke="#ffc857" stroke-width="0.6" opacity="0.35"/>
+        <rect x="70" y="70" width="60" height="60" fill="none" stroke="#4cc9f0" stroke-width="0.5" opacity="0.22" transform="rotate(45 100 100)"/>
+        <rect x="85" y="85" width="30" height="30" fill="none" stroke="#7a8fa6" stroke-width="0.4" opacity="0.12"/>
+        <circle cx="100" cy="100" r="2" fill="#ff5a36"/>
+      </svg>
+    </div>
+
+    <h2 class="outro-axiom reveal d1">让镜子承认自己是镜子。</h2>
+
+    <div class="outro-body reveal d2">
+      <p>这件作品不解决漂移。</p>
+      <p>它只是把镜子摆在镜子面前。让镜子承认自己是镜子。</p>
+      <p>然后你——作为<span class="em">系统外部的原始信号</span>——决定往窗口里注入什么。</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div>
+    <span>art/index.html · self-contained · 2026</span>
+  </div>
+  <div>
+    <span>INSPIRATION · 若山照彦 · 山梨大学先进生物技术中心</span>
+  </div>
+  <div>
+    <a href="../START_HERE.md">← 回到工程层</a>
+  </div>
+</footer>
+
+</main>
+
+<script>
+(function(){
+  'use strict';
+
+  // 1) 滚动进度条
+  const bar = document.getElementById('progressBar');
+  function updateBar(){
+    const h = document.documentElement;
+    const scrolled = h.scrollTop;
+    const total = h.scrollHeight - h.clientHeight;
+    const pct = total > 0 ? (scrolled / total) * 100 : 0;
+    bar.style.width = pct + '%';
+  }
+  window.addEventListener('scroll', updateBar, {passive:true});
+  window.addEventListener('resize', updateBar);
+  updateBar();
+
+  // 2) Intersection Observer - 入场动画
+  const reveals = document.querySelectorAll('.reveal');
+  if('IntersectionObserver' in window){
+    const io = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if(e.isIntersecting){
+          e.target.classList.add('in');
+          io.unobserve(e.target);
+        }
+      });
+    }, {threshold:0.12, rootMargin:'0px 0px -8% 0px'});
+    reveals.forEach(function(el){ io.observe(el); });
+  } else {
+    reveals.forEach(function(el){ el.classList.add('in'); });
+  }
+
+  // 3) 克隆谱系节点动态生成（58 代）
+  const nodesG = document.getElementById('lineageNodes');
+  if(nodesG){
+    const NS = 'http://www.w3.org/2000/svg';
+    const N = 58;
+    const x0 = 20, x1 = 1070;
+    for(let i=0;i<N;i++){
+      const x = x0 + (x1 - x0) * (i / (N-1));
+      const y = 55;
+      // 保真度从 1.0 单调衰减到约 0.05（撞墙）
+      const t = i / (N-1);
+      const fidelity = Math.max(0, 1 - Math.pow(t, 1.4) * 0.95);
+      // 颜色映射
+      let color;
+      if(t < 0.3) color = '#ff5a36';
+      else if(t < 0.55) color = '#ffc857';
+      else if(t < 0.85) color = '#4cc9f0';
+      else color = '#7a8fa6';
+
+      const c = document.createElementNS(NS, 'circle');
+      c.setAttribute('cx', x);
+      c.setAttribute('cy', y);
+      // 末代出现"残缺"视觉
+      const r = (i >= N-2) ? 3.2 : 2.4;
+      c.setAttribute('r', r);
+      c.setAttribute('fill', color);
+      c.setAttribute('opacity', 0.4 + fidelity * 0.6);
+      nodesG.appendChild(c);
+
+      // 每 10 代加标签
+      if(i % 14 === 0 && i > 0 && i < N-1){
+        const txt = document.createElementNS(NS, 'text');
+        txt.setAttribute('x', x);
+        txt.setAttribute('y', y - 14);
+        txt.setAttribute('text-anchor', 'middle');
+        txt.setAttribute('font-family', 'JetBrains Mono,monospace');
+        txt.setAttribute('font-size', '8');
+        txt.setAttribute('fill', '#5a5a60');
+        txt.setAttribute('letter-spacing', '1');
+        txt.textContent = 'G' + String(i+1).padStart(2,'0');
+        nodesG.appendChild(txt);
+      }
+    }
+    // 末代 - DNA 残缺视觉
+    const lastX = x1;
+    const broken = document.createElementNS(NS, 'g');
+    broken.setAttribute('transform', 'translate(' + lastX + ',55)');
+    broken.innerHTML = '<path d="M -4 -4 L 4 4 M -4 4 L 4 -4" stroke="#7a8fa6" stroke-width="1.2" opacity="0.9"/>';
+    nodesG.appendChild(broken);
+  }
+
+  // 4) 长文展开/收起 - 平滑滚动到展开位置
+  document.querySelectorAll('.longtext').forEach(function(d){
+    d.addEventListener('toggle', function(){
+      if(d.open){
+        // 展开后稍微调整位置，避免被章节标题遮挡
+        setTimeout(function(){
+          const r = d.getBoundingClientRect();
+          if(r.top < 80){
+            window.scrollBy({top: r.top - 100, behavior:'smooth'});
+          }
+        }, 50);
+      }
+    });
+  });
+
+  // 5) 锚点平滑滚动 - 顶部按钮
+  document.querySelectorAll('a[href^="#"]').forEach(function(a){
+    a.addEventListener('click', function(e){
+      const id = a.getAttribute('href').slice(1);
+      const el = document.getElementById(id);
+      if(el){
+        e.preventDefault();
+        el.scrollIntoView({behavior:'smooth'});
+      }
+    });
+  });
+
+})();
+</script>
+</body>
+</html>
