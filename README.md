@@ -51,6 +51,7 @@ Prompt 设定角色/规则      压缩防止约束"沉底"        状态门控�
 | 🏗️ 做复杂 Agent，模型行为混乱 | [`v3-state-machine/QUICKSTART.md`](v3-state-machine/QUICKSTART.md) |
 | 📊 想看实际效果对比 | [`examples/`](examples/) |
 | 🧠 想理解原理和设计决策 | 各层 `README.md` |
+| 🎨 想看信息论同构的艺术化叙事 | [`art/index.html`](art/index.html) |
 
 ---
 
@@ -95,8 +96,10 @@ Prompt 设定角色/规则      压缩防止约束"沉底"        状态门控�
 │
 ├── reference/                    # 补充参考
 │   └── api-params.md
+├── docs/                         # 通用文档
+│   ├── benchmark_methodology.md
+│   └── known_limitations.md
 │
-└── docs/                         # 通用文档
-    ├── benchmark_methodology.md
-    └── known_limitations.md
+└── art/                          # 艺术化叙事
+    └── index.html                #    滚动叙事 · 信息论同构 · self-contained
 ```
